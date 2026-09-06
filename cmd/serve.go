@@ -64,41 +64,8 @@ func newServeCmd() *cobra.Command {
 ~/.licode/config.json，无需重启。`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// 配置文件：默认 ~/.licode/config.toml；用 -c 指定其他路径
-			cfgPath := opts.ConfigPath
-			if cfgPath == "" {
-				cfgPath = settings.ConfigTOMLPath()
-			}
-			cfg, err := settings.LoadTOML(cfgPath)
-			if os.IsNotExist(err) {
-				cfg = settings.DefaultTOML()
-				if gerr := settings.GenerateTOML(cfgPath, cfg); gerr != nil {
-					return gerr
-				}
-				log.Printf("已生成配置文件 %s", cfgPath)
-			} else if err != nil {
-				return fmt.Errorf("加载配置文件 %s: %w", cfgPath, err)
-			}
-			if !cmd.Flags().Changed("host") && cfg.Server.Host != "" {
-				opts.Host = cfg.Server.Host
-			}
-			if !cmd.Flags().Changed("port") && cfg.Server.Port != 0 {
-				opts.Port = cfg.Server.Port
-			}
-			if !cmd.Flags().Changed("username") && cfg.Server.Username != "" {
-				opts.Username = cfg.Server.Username
-			}
-			if !cmd.Flags().Changed("password") && cfg.Server.Password != "" {
-				opts.Password = cfg.Server.Password
-			}
-			if !cmd.Flags().Changed("https") && cfg.Server.HTTPS {
-				opts.HTTPS = true
-			}
-			if !cmd.Flags().Changed("tls-cert") && cfg.Server.TLSCert != "" {
-				opts.TLSCert = cfg.Server.TLSCert
-			}
-			if !cmd.Flags().Changed("tls-key") && cfg.Server.TLSKey != "" {
-				opts.TLSKey = cfg.Server.TLSKey
+			if err := loadServeConfig(cmd, opts); err != nil {
+				return err
 			}
 			return runServe(opts)
 		},
@@ -114,6 +81,58 @@ func newServeCmd() *cobra.Command {
 	f.StringVar(&opts.TLSKey, "tls-key", "", "TLS 私钥文件路径（key.pem）")
 	f.StringVarP(&opts.ConfigPath, "config", "c", "", "配置文件路径（默认 ~/.licode/config.toml）")
 	return c
+}
+
+// loadServeConfig 加载（或生成）TOML 配置，并将命令行未显式指定的参数回填为配置值。
+func loadServeConfig(cmd *cobra.Command, opts *ServeOptions) error {
+	// 配置文件：默认 ~/.licode/config.toml；用 -c 指定其他路径
+	cfgPath := opts.ConfigPath
+	if cfgPath == "" {
+		cfgPath = settings.ConfigTOMLPath()
+	}
+	cfg, err := settings.LoadTOML(cfgPath)
+	if os.IsNotExist(err) {
+		cfg = settings.DefaultTOML()
+		if gerr := settings.GenerateTOML(cfgPath, cfg); gerr != nil {
+			return gerr
+		}
+		log.Printf("已生成配置文件 %s", cfgPath)
+	} else if err != nil {
+		return fmt.Errorf("加载配置文件 %s: %w", cfgPath, err)
+	}
+	if !cmd.Flags().Changed("host") && cfg.Server.Host != "" {
+		opts.Host = cfg.Server.Host
+	}
+	if !cmd.Flags().Changed("port") && cfg.Server.Port != 0 {
+		opts.Port = cfg.Server.Port
+	}
+	if !cmd.Flags().Changed("username") && cfg.Server.Username != "" {
+		opts.Username = cfg.Server.Username
+	}
+	if !cmd.Flags().Changed("password") && cfg.Server.Password != "" {
+		opts.Password = cfg.Server.Password
+	}
+	if !cmd.Flags().Changed("https") && cfg.Server.HTTPS {
+		opts.HTTPS = true
+	}
+	if !cmd.Flags().Changed("tls-cert") && cfg.Server.TLSCert != "" {
+		opts.TLSCert = cfg.Server.TLSCert
+	}
+	if !cmd.Flags().Changed("tls-key") && cfg.Server.TLSKey != "" {
+		opts.TLSKey = cfg.Server.TLSKey
+	}
+	return nil
+}
+
+// appShutdownCh 允许桌面窗口（app 命令）触发与 SIGTERM 相同的优雅关停。
+var (
+	appShutdownOnce sync.Once
+	appShutdownCh   = make(chan struct{})
+)
+
+// TriggerAppShutdown 请求服务器优雅关停（app 窗口关闭时调用）。
+func TriggerAppShutdown() {
+	appShutdownOnce.Do(func() { close(appShutdownCh) })
 }
 
 // listenAddr 计算监听地址 host:port。
@@ -155,7 +174,9 @@ func runServe(opts *ServeOptions) error {
 	_ = settings.EnsureDirs()
 	if lf, err := settings.LogFile(); err == nil {
 		defer lf.Close()
-		log.SetOutput(io.MultiWriter(os.Stderr, lf))
+		// 文件日志在前：GUI 构建（-H windowsgui）下 os.Stderr 为无效句柄，
+		// io.MultiWriter 遇错即中止，若 stderr 在前会导致文件日志也丢失。
+		log.SetOutput(io.MultiWriter(lf, os.Stderr))
 	}
 
 	// 版本计数递增（0.0.0.0 → … → 0.0.0.100 → 0.0.1.0）
@@ -614,7 +635,10 @@ case websocket.TypeMessage:
 		}
 	}()
 	go func() {
-		<-stop
+		select {
+		case <-stop:
+		case <-appShutdownCh:
+		}
 		st.mu.Lock()
 		st.shuttingDown = true
 		to := st.settings.Snapshot().ShutdownTimeout

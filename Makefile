@@ -15,7 +15,8 @@ build:
 	CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST)/$(BINARY)-darwin-amd64 .
 	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(DIST)/$(BINARY)-darwin-arm64 .
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST)/$(BINARY)-windows-amd64.exe .
-	@echo "构建完成，见 $(DIST)/"
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS) -H windowsgui" -o $(DIST)/$(BINARY)-app-windows-amd64.exe .
+	@echo "构建完成，见 $(DIST)/（licode-app-*.exe 为桌面窗口版）"
 
 # 47 平台一键脚本（原脚本，输出 build/）
 build-all:

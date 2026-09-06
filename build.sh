@@ -49,4 +49,16 @@ while IFS=/ read -r GOOS GOARCH; do
     fi
 done <<< "$PLATFORMS"
 
+# Windows 桌面窗口版（WebView2，-H windowsgui 隐藏控制台）
+app_out="${OUT_DIR}/${MODULE}-app-windows-amd64.exe"
+if CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+    go build -buildvcs=false -ldflags="$LDFLAGS -H windowsgui" -o "$app_out" . 2>/dev/null; then
+    echo "  [OK]   windows/amd64 app（桌面窗口版，无控制台）"
+    built=$((built + 1))
+else
+    echo "  [SKIP] windows/amd64 app（编译失败，已跳过）"
+    rm -f "$app_out" 2>/dev/null
+    skipped=$((skipped + 1))
+fi
+
 echo "==> 完成：成功 $built 个，跳过 $skipped 个，产物在 $OUT_DIR/"
